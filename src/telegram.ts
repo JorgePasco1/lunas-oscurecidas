@@ -2,6 +2,15 @@ import { config } from "./config.js";
 
 const API_BASE = `https://api.telegram.org/bot${config.telegram.token}`;
 
+/** Escape text for Telegram HTML parse mode. Use for ANY dynamic value
+ *  (site data, error messages) interpolated into a message. */
+export function esc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 /**
  * Send a Telegram message. Never throws — notification failures are logged and
  * swallowed so a Telegram outage can't crash the watcher loop.
@@ -18,7 +27,7 @@ export async function sendTelegram(
       body: JSON.stringify({
         chat_id: config.telegram.chatId,
         text,
-        parse_mode: "Markdown",
+        parse_mode: "HTML",
         disable_web_page_preview: true,
         disable_notification: opts.silent ?? false,
       }),

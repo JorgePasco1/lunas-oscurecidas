@@ -8,7 +8,7 @@
 #   fly deploy
 
 app = "lunas-oscurecidas-watcher"
-primary_region = "scl"   # Santiago — closest fly region to Peru
+primary_region = "gru"   # São Paulo — closest fly region to Peru
 
 [build]
   dockerfile = "Dockerfile"

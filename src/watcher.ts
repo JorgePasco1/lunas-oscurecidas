@@ -1,7 +1,7 @@
 import { config } from "./config.js";
 import { runScrape } from "./scraper.js";
 import { loadState, saveState } from "./state.js";
-import { sendTelegram } from "./telegram.js";
+import { esc, sendTelegram } from "./telegram.js";
 import {
   slotKey,
   type ScrapeResult,
@@ -22,7 +22,7 @@ function fmtSlots(slots: SlotInfo[]): string {
   const lines: string[] = [];
   for (const [fecha, arr] of byFecha) {
     const horas = arr.map((a) => a.hora).join(", ");
-    lines.push(`• *${fecha}* — ${horas}`);
+    lines.push(`• <b>${esc(fecha)}</b> — ${esc(horas)}`);
   }
   return lines.join("\n");
 }
@@ -47,11 +47,11 @@ export async function runCycle(
       !state.degradedNotified
     ) {
       await sendTelegram(
-        `⚠️ *Watcher degraded*\n` +
+        `⚠️ <b>Watcher degraded</b>\n` +
           `The PNP site check has failed ${state.failureStreak} times in a row.\n` +
-          `Last stage: \`${result.stage}\`\n` +
-          `Reason: ${result.reason}\n\n` +
-          `_Likely the site is down or login is failing. I'll tell you when it recovers._`
+          `Last stage: <code>${esc(result.stage)}</code>\n` +
+          `Reason: ${esc(result.reason)}\n\n` +
+          `<i>Likely the site is down or login is failing. I'll tell you when it recovers.</i>`
       );
       state.degradedNotified = true;
     }
@@ -68,7 +68,7 @@ export async function runCycle(
 
   if (wasDegraded) {
     await sendTelegram(
-      `✅ *Watcher recovered* — the PNP site is reachable again and the check is running normally.`
+      `✅ <b>Watcher recovered</b> — the PNP site is reachable again and the check is running normally.`
     );
   }
 
@@ -81,8 +81,8 @@ export async function runCycle(
 
   if (fresh.length > 0) {
     await sendTelegram(
-      `🚨 *¡CUPOS DISPONIBLES!* 🚨\n` +
-        `Sede: *${config.targetSede}*\n\n` +
+      `🚨 <b>¡CUPOS DISPONIBLES!</b> 🚨\n` +
+        `Sede: <b>${esc(config.targetSede)}</b>\n\n` +
         `${fmtSlots(fresh)}\n\n` +
         `👉 Entra YA a reservar: ${MENU_URL}`
     );
@@ -113,9 +113,9 @@ export async function maybeHeartbeat(force = false): Promise<void> {
     : "—";
   const healthy = state.failureStreak === 0;
   await sendTelegram(
-    `${healthy ? "✅" : "⚠️"} *Watcher activo*\n` +
-      `Vigilando: *${config.targetSede}*\n` +
-      `Última verificación OK: ${lastCheck}\n` +
+    `${healthy ? "✅" : "⚠️"} <b>Watcher activo</b>\n` +
+      `Vigilando: <b>${esc(config.targetSede)}</b>\n` +
+      `Última verificación OK: ${esc(lastCheck)}\n` +
       `Ciclos OK desde el último reporte: ${state.cyclesOkSinceHeartbeat}\n` +
       `Fallos consecutivos ahora: ${state.failureStreak}`,
     { silent: true }

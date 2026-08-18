@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { assertTelegramConfigured, config } from "./config.js";
 import { ensureDataDir } from "./state.js";
-import { sendTelegram } from "./telegram.js";
+import { esc, sendTelegram } from "./telegram.js";
 import { maybeHeartbeat, runCycle } from "./watcher.js";
 
 let running = false;
@@ -37,8 +37,10 @@ async function main(): Promise<void> {
   );
 
   await sendTelegram(
-    `🟢 *Watcher iniciado*\n` +
-      `Vigilando *${config.targetSede}* cada \`${config.schedule.checkCron}\`.\n` +
+    `🟢 <b>Watcher iniciado</b>\n` +
+      `Vigilando <b>${esc(config.targetSede)}</b> cada <code>${esc(
+        config.schedule.checkCron
+      )}</code>.\n` +
       `Te avisaré apenas se abran cupos.`
   );
   // Force a heartbeat now so the first "alive" baseline is recorded.
@@ -59,9 +61,9 @@ async function main(): Promise<void> {
 main().catch(async (err) => {
   console.error("[index] fatal:", err);
   await sendTelegram(
-    `🔴 *Watcher se detuvo* con un error fatal:\n\`${
+    `🔴 <b>Watcher se detuvo</b> con un error fatal:\n<code>${esc(
       err instanceof Error ? err.message : String(err)
-    }\``
+    )}</code>`
   ).catch(() => {});
   process.exit(1);
 });

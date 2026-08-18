@@ -279,6 +279,35 @@ async function readAvailability(
   await sede.selectOption({ label: sedeMatch });
   await settle(page);
 
+  // TEST HOOK: inject a synthetic bookable slot into the real modal DOM so the
+  // detection + alert pipeline can be exercised end-to-end while the live site
+  // has no cupos. Enable with SIMULATE_CUPOS=true. Labels say SIMULADO so a
+  // real alert is never mistaken for a genuine cupo.
+  if ((process.env.SIMULATE_CUPOS ?? "").toLowerCase() === "true") {
+    log("SIMULATE_CUPOS on — injecting fake slot into modal");
+    await page.evaluate(() => {
+      const f = document.querySelector<HTMLSelectElement>(
+        "#MainContent_idUcitas_cboFecha"
+      );
+      if (f) {
+        const o = document.createElement("option");
+        o.text = "18/08/2026 (SIMULADO)";
+        f.add(o);
+      }
+      const h = document.querySelector<HTMLSelectElement>(
+        "#MainContent_idUcitas_cboHora"
+      );
+      if (h) {
+        const o = document.createElement("option");
+        o.text = "09:00 (SIMULADO)";
+        h.add(o);
+      }
+    });
+    // Read the injected hora directly (no fecha re-select, which would postback
+    // and wipe the injected options).
+    return readHoraSlots(hora, modal, sedeMatch, "18/08/2026 (SIMULADO)");
+  }
+
   // Iterate every available fecha and inspect its horas.
   const fechaLabels = await optionLabels(fecha);
   const realFechas = fechaLabels.filter((f) => !NO_SLOT_RE.test(f));

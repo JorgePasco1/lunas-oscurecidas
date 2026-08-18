@@ -76,6 +76,20 @@ Las capturas de fallo quedan en `data/screenshots/`.
 También hay utilidades: `pnpm probe` (inspecciona la página de login sin
 credenciales) y `pnpm verify` (prueba offline de la lógica de alertas/dedup/fallos).
 
+### Probar el caso "hay cupos"
+
+Como normalmente el sitio está en "Sin Cupos", para verificar que las alertas
+funcionan cuando SÍ hay cupos, corre con `SIMULATE_CUPOS=true`: inyecta un cupo
+falso (marcado `SIMULADO`) en el modal real y dispara la alerta de Telegram
+end-to-end.
+
+```bash
+SIMULATE_CUPOS=true pnpm dev
+```
+
+Recibirás una alerta "🚨 ¡CUPOS DISPONIBLES!" real. **No** actives esta variable
+en producción (déjala fuera de los `fly secrets` y del `fly.toml`).
+
 Correr el watcher completo (con scheduler + Telegram):
 
 ```bash
