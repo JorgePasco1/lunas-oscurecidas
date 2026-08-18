@@ -153,8 +153,15 @@ async function openModal(page: Page): Promise<Locator> {
     console.log("submit inputs:", JSON.stringify(submits));
   });
 
-  // Exact name avoids matching the "Reserva Cita Peritaje" heading.
-  await clickByText(page, /^Reservar Cita$/i);
+  // Confirmed control id. There are TWO "Reservar Cita" buttons on the page
+  // (this one and one inside the modal), so target the id directly and fall
+  // back to text only if the markup changes.
+  const citaBtn = page.locator("#MainContent_btnCita");
+  if (await citaBtn.count()) {
+    await citaBtn.first().click({ timeout: STEP_TIMEOUT });
+  } else {
+    await clickByText(page, /^Reservar Cita$/i);
+  }
 
   const modal = page
     .locator(".modal, [role=dialog]")
@@ -196,6 +203,20 @@ async function openModal(page: Page): Promise<Locator> {
 async function modalSelects(
   modal: Locator
 ): Promise<{ sede: Locator; fecha: Locator; hora: Locator }> {
+  // Confirmed control ids (preferred). Fall back to DOM order if the ids change.
+  const byId = {
+    sede: modal.locator("#MainContent_idUcitas_cbosede"),
+    fecha: modal.locator("#MainContent_idUcitas_cboFecha"),
+    hora: modal.locator("#MainContent_idUcitas_cboHora"),
+  };
+  if (
+    (await byId.sede.count()) &&
+    (await byId.fecha.count()) &&
+    (await byId.hora.count())
+  ) {
+    return byId;
+  }
+
   const selects = modal.locator("select");
   const count = await selects.count();
   if (count < 3) {

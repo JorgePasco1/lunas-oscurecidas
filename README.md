@@ -25,7 +25,8 @@ real en vez de replicar los requests HTTP, que serían mucho más frágiles.
 
 ## Requisitos
 
-- Node.js 20+
+- Node.js 22+ (hay un `.nvmrc`; corre `nvm use`)
+- pnpm 11 (via corepack: `corepack enable`)
 - Una cuenta en [fly.io](https://fly.io) (para hosting 24/7)
 - Un bot de Telegram
 
@@ -41,9 +42,11 @@ real en vez de replicar los requests HTTP, que serían mucho más frágiles.
 ## 2. Configurar
 
 ```bash
+nvm use            # Node 22 (ver .nvmrc)
+corepack enable    # habilita pnpm
 cp .env.example .env
 # edita .env con tu DNI, clave, token y chat id
-npm install
+pnpm install
 ```
 
 ## 3. Probar localmente
@@ -51,7 +54,7 @@ npm install
 Descubrir/confirmar selectores con navegador visible (una sola pasada, sin Telegram):
 
 ```bash
-HEADLESS=false npm run check
+HEADLESS=false pnpm check
 ```
 
 Deberías ver el flujo completo y, al final, `no cupos available right now` (lo normal).
@@ -64,19 +67,19 @@ Las capturas de fallo quedan en `data/screenshots/`.
 > de esas partes:
 >
 > ```bash
-> DUMP_DOM=true HEADLESS=false npm run check
+> DUMP_DOM=true HEADLESS=false pnpm check
 > ```
 >
 > Si algún paso falla, comparte esa salida (o la captura en `data/screenshots/`)
 > para ajustar el selector en `src/scraper.ts`.
 
-También hay utilidades: `npm run probe` (inspecciona la página de login sin
-credenciales) y `npm run verify` (prueba offline de la lógica de alertas/dedup/fallos).
+También hay utilidades: `pnpm probe` (inspecciona la página de login sin
+credenciales) y `pnpm verify` (prueba offline de la lógica de alertas/dedup/fallos).
 
 Correr el watcher completo (con scheduler + Telegram):
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 ## 4. Desplegar en fly.io

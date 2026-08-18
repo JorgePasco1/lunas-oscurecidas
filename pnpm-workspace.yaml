@@ -1,0 +1,6 @@
+# pnpm blocks dependency build scripts by default. Allow the ones we need:
+#   playwright – downloads the Chromium browser
+#   esbuild    – tsx's bundler engine
+allowBuilds:
+  playwright: true
+  esbuild: true

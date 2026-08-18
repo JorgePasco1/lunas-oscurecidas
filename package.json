@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "description": "Watches the PNP 'Lunas Oscurecidas' site for open appointment slots and alerts via Telegram",
   "type": "module",
+  "packageManager": "pnpm@11.22.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
