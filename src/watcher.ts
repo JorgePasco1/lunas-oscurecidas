@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import { runScrape } from "./scraper.js";
 import { loadState, saveState } from "./state.js";
 import { esc, sendTelegram } from "./telegram.js";
+import { limaNow } from "./time.js";
 import {
   slotKey,
   type ScrapeResult,
@@ -110,11 +111,13 @@ export async function runCycle(
   if (fresh.length > 0) {
     await sendTelegram(
       `🚨 <b>¡CUPOS DISPONIBLES!</b> 🚨\n` +
-        `Sede: <b>${esc(config.targetSede)}</b>\n\n` +
+        `Sede: <b>${esc(config.targetSede)}</b>\n` +
+        `Detectado: <b>${esc(limaNow())}</b>\n\n` +
         `${fmtSlots(fresh)}\n\n` +
-        `👉 Entra YA a reservar: ${MENU_URL}`
+        `👉 Entra YA a reservar: ${MENU_URL}`,
+      { attempts: 6 } // critical alert — try harder over the flaky link
     );
-    console.log(`[watcher] alerted ${fresh.length} new slot(s)`);
+    console.log(`[watcher] [${limaNow()}] alerted ${fresh.length} new slot(s)`);
   }
 
   // Keep alertedKeys in sync with what's currently available so a slot that
