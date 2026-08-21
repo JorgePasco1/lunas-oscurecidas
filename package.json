@@ -14,7 +14,8 @@
     "check": "tsx src/check-once.ts",
     "probe": "tsx src/probe-login.ts",
     "verify": "tsx src/verify-logic.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:booking": "tsx src/verify-booking.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

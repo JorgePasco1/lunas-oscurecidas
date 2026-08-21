@@ -40,12 +40,19 @@ async function main(): Promise<void> {
       `heartbeat=${config.schedule.heartbeatHours}h headless=${config.headless}`
   );
 
+  const bookingMode = !config.booking.enabled
+    ? "solo aviso (sin reservar)"
+    : config.booking.dryRun
+      ? "auto-reserva en SIMULACRO (dry-run)"
+      : "auto-reserva EN VIVO";
+  const who = config.accounts.map((a) => a.label).join(", ");
   await sendTelegram(
     `🟢 <b>Watcher iniciado</b>\n` +
       `Vigilando <b>${esc(config.targetSede)}</b> cada <code>${esc(
         config.schedule.checkCron
       )}</code>.\n` +
-      `Te avisaré apenas se abran cupos.`
+      `Cuentas: <b>${esc(who)}</b>\n` +
+      `Modo: <b>${esc(bookingMode)}</b>`
   );
   // Force a heartbeat now so the first "alive" baseline is recorded.
   await maybeHeartbeat(true);

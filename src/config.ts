@@ -1,4 +1,5 @@
 import "dotenv/config";
+import type { Account } from "./types.js";
 
 function required(name: string): string {
   const v = process.env[name]?.trim();
@@ -20,18 +21,59 @@ function optionalInt(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function bool(name: string, fallback: boolean): boolean {
+  const v = process.env[name]?.trim().toLowerCase();
+  if (v === undefined || v === "") return fallback;
+  return v === "true" || v === "1" || v === "yes";
+}
+
+/** Parse ACCOUNT_1_*, ACCOUNT_2_*, … Falls back to the legacy single-account
+ *  PNP_* vars so existing deployments keep working. */
+function parseAccounts(): Account[] {
+  const accounts: Account[] = [];
+  for (let i = 1; i <= 20; i++) {
+    const dni = process.env[`ACCOUNT_${i}_DNI`]?.trim();
+    if (!dni) continue;
+    const clave = process.env[`ACCOUNT_${i}_CLAVE`]?.trim();
+    if (!clave) throw new Error(`ACCOUNT_${i}_DNI set but ACCOUNT_${i}_CLAVE missing`);
+    accounts.push({
+      label: optional(`ACCOUNT_${i}_LABEL`, `cuenta-${i}`),
+      tipoDoc: optional(`ACCOUNT_${i}_TIPO_DOC`, "DNI"),
+      documento: dni,
+      clave,
+      expediente: optional(`ACCOUNT_${i}_EXPEDIENTE`, ""),
+    });
+  }
+  if (accounts.length === 0) {
+    // Legacy single-account fallback.
+    accounts.push({
+      label: optional("PNP_LABEL", "cuenta-1"),
+      tipoDoc: optional("PNP_TIPO_DOC", "DNI"),
+      documento: required("PNP_DNI"),
+      clave: required("PNP_CLAVE"),
+      expediente: optional("EXPEDIENTE", ""),
+    });
+  }
+  return accounts;
+}
+
 export const config = {
   site: {
     menuUrl:
       "https://sistemas.policia.gob.pe/lunasoscurecidas/Solicitud_Menu.aspx",
   },
-  pnp: {
-    tipoDoc: optional("PNP_TIPO_DOC", "DNI"),
-    documento: required("PNP_DNI"),
-    clave: required("PNP_CLAVE"),
-    expediente: optional("EXPEDIENTE", ""),
-  },
+  accounts: parseAccounts(),
   targetSede: optional("TARGET_SEDE", "LIMA-LA VICTORIA"),
+  booking: {
+    // Master switch. When false the watcher only notifies (never books).
+    enabled: bool("BOOKING_ENABLED", false),
+    // When true, do everything EXCEPT the final confirm — report "would book".
+    dryRun: bool("DRY_RUN_BOOKING", true),
+    // Prefer the earliest slot that fits ALL unbooked accounts together.
+    sameSlot: bool("BOOK_SAME_SLOT", true),
+    // How many account browser sessions to run at once (Pi RAM is limited).
+    concurrency: optionalInt("BOOK_CONCURRENCY", 1),
+  },
   telegram: {
     // Optional at import so the scraper can run standalone for selector
     // discovery; index.ts calls assertTelegramConfigured() before scheduling.

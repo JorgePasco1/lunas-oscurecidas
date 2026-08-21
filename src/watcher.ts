@@ -1,3 +1,4 @@
+import { attemptBookings, fmtBookingResults } from "./booking.js";
 import { config } from "./config.js";
 import { runScrape } from "./scraper.js";
 import { loadState, saveState } from "./state.js";
@@ -29,6 +30,7 @@ function materialSig(s: WatcherState): string {
     f: s.failureStreak,
     d: s.degradedNotified,
     h: s.lastHeartbeatAt,
+    b: Object.keys(s.booked).sort(),
   });
 }
 
@@ -118,6 +120,36 @@ export async function runCycle(
       { attempts: 6 } // critical alert — try harder over the flaky link
     );
     console.log(`[watcher] [${limaNow()}] alerted ${fresh.length} new slot(s)`);
+  }
+
+  // ---- Auto-booking ----
+  if (config.booking.enabled && available.length > 0) {
+    const unbooked = config.accounts.filter((a) => !state.booked[a.label]);
+    // Live: retry every cycle until booked. Dry-run: only act on NEW slots so we
+    // don't re-report "would book" every 2 minutes while a slot lingers.
+    const shouldAct = config.booking.dryRun ? fresh.length > 0 : true;
+    if (unbooked.length > 0 && shouldAct) {
+      console.log(
+        `[watcher] booking (${config.booking.dryRun ? "DRY-RUN" : "LIVE"}) for: ${unbooked
+          .map((a) => a.label)
+          .join(", ")}`
+      );
+      const results = await attemptBookings(unbooked, available, config.booking.dryRun);
+      // Record real bookings so we stop trying for those accounts.
+      for (const r of results) {
+        if (r.ok && !r.dryRun && r.slot) {
+          state.booked[r.account] = {
+            fecha: r.slot.fecha,
+            hora: r.slot.hora,
+            at: new Date().toISOString(),
+          };
+        }
+      }
+      const header = config.booking.dryRun
+        ? `🧪 <b>SIMULACRO de reserva</b> (dry-run)`
+        : `📩 <b>Intento de reserva</b>`;
+      await sendTelegram(`${header}\n${fmtBookingResults(results)}`, { attempts: 6 });
+    }
   }
 
   // Keep alertedKeys in sync with what's currently available so a slot that

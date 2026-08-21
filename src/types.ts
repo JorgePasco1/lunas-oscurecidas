@@ -6,6 +6,34 @@ export interface SlotInfo {
   cupos: number;
 }
 
+/** One PNP account we log in as (the user, a friend, …). */
+export interface Account {
+  /** Human label for messages/state, e.g. "Jorge". */
+  label: string;
+  tipoDoc: string;
+  documento: string;
+  clave: string;
+  /** Expediente number to open; empty = first row. */
+  expediente: string;
+}
+
+/** A booking that was made (or, in dry-run, would have been made). */
+export interface BookingRecord {
+  fecha: string;
+  hora: string;
+  at: string; // ISO timestamp
+}
+
+/** Result of one booking attempt for one account. */
+export interface BookingResult {
+  account: string;
+  ok: boolean;
+  dryRun: boolean;
+  slot?: SlotInfo;
+  reason?: string;
+  screenshot?: string;
+}
+
 /** Result of one scrape cycle. Success and failure are never conflated: a site
  *  error returns `ok: false` (not an empty `available` list). */
 export type ScrapeResult =
@@ -26,6 +54,10 @@ export interface WatcherState {
   lastSuccessAt: string | null;
   /** Successful cycles counted since the last heartbeat (for the heartbeat text). */
   cyclesOkSinceHeartbeat: number;
+  /** Confirmed bookings, keyed by account label. Once present, that account is
+   *  done and we stop trying to book for it. Only set for real (non-dry-run)
+   *  bookings. */
+  booked: Record<string, BookingRecord>;
 }
 
 export const initialState: WatcherState = {
@@ -35,6 +67,7 @@ export const initialState: WatcherState = {
   lastHeartbeatAt: null,
   lastSuccessAt: null,
   cyclesOkSinceHeartbeat: 0,
+  booked: {},
 };
 
 /** Stable identity for a slot, used for alert de-duplication. */

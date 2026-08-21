@@ -8,7 +8,7 @@ import {
   type Page,
 } from "playwright";
 import { config } from "./config.js";
-import type { ScrapeResult, SlotInfo } from "./types.js";
+import type { Account, ScrapeResult, SlotInfo } from "./types.js";
 
 const NAV_TIMEOUT = 45_000;
 const STEP_TIMEOUT = 20_000;
@@ -56,7 +56,11 @@ async function optionLabels(select: Locator): Promise<string[]> {
     .then((texts) => texts.map((t) => t.trim()).filter((t) => t.length > 0));
 }
 
-async function screenshot(page: Page, name: string): Promise<string> {
+export async function settleExport(page: Page, ms?: number): Promise<void> {
+  return settle(page, ms);
+}
+
+export async function screenshot(page: Page, name: string): Promise<string> {
   const dir = path.join(config.dataDir, "screenshots");
   await fs.mkdir(dir, { recursive: true });
   // Stable filename per stage (overwrites) so failures don't accumulate PNGs on
@@ -107,8 +111,8 @@ async function clickByText(page: Page, name: string | RegExp): Promise<void> {
   await page.getByText(name).first().click({ timeout: STEP_TIMEOUT });
 }
 
-async function login(page: Page): Promise<void> {
-  log("navigating to menu");
+async function login(page: Page, account: Account): Promise<void> {
+  log(`navigating to menu (${account.label})`);
   await gotoWithRetry(page, config.site.menuUrl);
 
   // Concrete ASP.NET control ids, confirmed against the live login DOM.
@@ -116,17 +120,17 @@ async function login(page: Page): Promise<void> {
   //  "clave" / "nro de documento" inputs for the password-recovery flow.)
   const tipoDoc = page.locator("#DdlDocumento");
   await tipoDoc.waitFor({ state: "visible", timeout: STEP_TIMEOUT });
-  await tipoDoc.selectOption({ label: config.pnp.tipoDoc }).catch(async () => {
+  await tipoDoc.selectOption({ label: account.tipoDoc }).catch(async () => {
     const labels = await optionLabels(tipoDoc);
     const match = labels.find((l) =>
-      l.toUpperCase().includes(config.pnp.tipoDoc.toUpperCase())
+      l.toUpperCase().includes(account.tipoDoc.toUpperCase())
     );
     if (match) await tipoDoc.selectOption({ label: match });
   });
   await settle(page, 500);
 
-  await page.locator("#TxtCIP").fill(config.pnp.documento);
-  await page.locator("#TxtClave").fill(config.pnp.clave);
+  await page.locator("#TxtCIP").fill(account.documento);
+  await page.locator("#TxtClave").fill(account.clave);
 
   await page.locator("#BtnContinuar").click({ timeout: STEP_TIMEOUT });
 
@@ -138,11 +142,11 @@ async function login(page: Page): Promise<void> {
   log("logged in");
 }
 
-async function openExpediente(page: Page): Promise<void> {
+async function openExpediente(page: Page, account: Account): Promise<void> {
   // Pick the target row (by expediente number if configured, else the first).
   let row: Locator;
-  if (config.pnp.expediente) {
-    row = page.locator("tr", { hasText: config.pnp.expediente }).first();
+  if (account.expediente) {
+    row = page.locator("tr", { hasText: account.expediente }).first();
   } else {
     // First data row of the solicitudes table.
     row = page.locator("table tbody tr").first();
@@ -280,19 +284,17 @@ async function readHoraSlots(
   }));
 }
 
-async function readAvailability(
+/** Select the target sede in the modal and wait for Fecha to repopulate.
+ *  Returns the matched sede label. */
+export async function selectSede(
   page: Page,
   modal: Locator
-): Promise<SlotInfo[]> {
+): Promise<{ sede: Locator; fecha: Locator; hora: Locator; sedeMatch: string }> {
   const { sede, fecha, hora } = await modalSelects(modal);
-
-  // Select the target sede.
   const sedeLabels = await optionLabels(sede);
   log("sede options:", sedeLabels.join(" | "));
   const sedeMatch =
-    sedeLabels.find(
-      (l) => l.toUpperCase() === config.targetSede.toUpperCase()
-    ) ??
+    sedeLabels.find((l) => l.toUpperCase() === config.targetSede.toUpperCase()) ??
     sedeLabels.find((l) =>
       l.toUpperCase().includes(config.targetSede.toUpperCase())
     );
@@ -303,6 +305,14 @@ async function readAvailability(
   }
   await sede.selectOption({ label: sedeMatch });
   await settle(page);
+  return { sede, fecha, hora, sedeMatch };
+}
+
+async function readAvailability(
+  page: Page,
+  modal: Locator
+): Promise<SlotInfo[]> {
+  const { fecha, hora, sedeMatch } = await selectSede(page, modal);
 
   // TEST HOOK: inject a synthetic bookable slot into the real modal DOM so the
   // detection + alert pipeline can be exercised end-to-end while the live site
@@ -348,58 +358,125 @@ async function readAvailability(
       found.push(...slots);
     }
   }
-  return found;
+  return sortSlots(found);
 }
 
-export async function runScrape(): Promise<ScrapeResult> {
+/** Parse a dd/mm/yyyy label to a sortable number (0 if unparseable). */
+export function parseFecha(fecha: string): number {
+  const m = fecha.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return 0;
+  return new Date(+m[3], +m[2] - 1, +m[1]).getTime();
+}
+
+/** Earliest fecha first, then earliest hora. */
+export function sortSlots(slots: SlotInfo[]): SlotInfo[] {
+  return [...slots].sort(
+    (a, b) => parseFecha(a.fecha) - parseFecha(b.fecha) || a.hora.localeCompare(b.hora)
+  );
+}
+
+/** Select a specific fecha then hora in the modal (for booking). Returns false
+ *  if either option is no longer present (slot vanished between check and book). */
+export async function selectSlot(
+  page: Page,
+  fecha: Locator,
+  hora: Locator,
+  targetFecha: string,
+  targetHora: string
+): Promise<boolean> {
+  const fechas = await optionLabels(fecha);
+  if (!fechas.includes(targetFecha)) return false;
+  await fecha.selectOption({ label: targetFecha });
+  await settle(page);
+  const horas = await optionLabels(hora);
+  if (!horas.includes(targetHora)) return false;
+  await hora.selectOption({ label: targetHora });
+  await settle(page, 600);
+  return true;
+}
+
+export interface Session {
+  browser: Browser;
+  page: Page;
+  modal: Locator;
+  close: () => Promise<void>;
+}
+
+/** Launch a browser, log in as `account`, open its expediente and the Reserva
+ *  de Citas modal. Caller MUST call close(). */
+export async function openSession(account: Account): Promise<Session> {
+  const browser = await chromium.launch({
+    headless: config.headless,
+    executablePath: config.chromiumPath || undefined,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
+  const context = await browser.newContext({
+    userAgent: USER_AGENT,
+    viewport: { width: 1440, height: 900 },
+    locale: "es-PE",
+  });
+  context.setDefaultTimeout(STEP_TIMEOUT);
+  context.setDefaultNavigationTimeout(NAV_TIMEOUT);
+  const page = await context.newPage();
+  const close = async () => {
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+  };
+  let stage = "login";
+  try {
+    await login(page, account);
+    stage = "open-expediente";
+    await openExpediente(page, account);
+    stage = "open-modal";
+    const modal = await openModal(page);
+    return { browser, page, modal, close };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    let shot: string | undefined;
+    if (config.saveScreenshots && !isNetworkError(reason)) {
+      shot = await screenshot(page, `fail-${stage}`).catch(() => undefined);
+    }
+    await close();
+    const e = err instanceof Error ? err : new Error(reason);
+    (e as StageError).stage = stage;
+    (e as StageError).screenshot = shot;
+    throw e;
+  }
+}
+
+/** Error thrown by openSession/booking, tagged with the stage + screenshot. */
+interface StageError extends Error {
+  stage?: string;
+  screenshot?: string;
+}
+
+/** Check availability for one account: open a session, read slots, close. */
+export async function checkAvailability(account: Account): Promise<ScrapeResult> {
   // Small random jitter so we don't hit the server on an exact fixed cadence.
   await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 4000)));
 
-  let browser: Browser | null = null;
-  let context: BrowserContext | null = null;
-  let stage = "launch";
-  let page: Page | undefined;
+  let session: Session | undefined;
+  let stage = "read-availability";
   try {
-    browser = await chromium.launch({
-      headless: config.headless,
-      executablePath: config.chromiumPath || undefined,
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    });
-    context = await browser.newContext({
-      userAgent: USER_AGENT,
-      viewport: { width: 1440, height: 900 },
-      locale: "es-PE",
-    });
-    context.setDefaultTimeout(STEP_TIMEOUT);
-    context.setDefaultNavigationTimeout(NAV_TIMEOUT);
-    page = await context.newPage();
-
-    stage = "login";
-    await login(page);
-
-    stage = "open-expediente";
-    await openExpediente(page);
-
-    stage = "open-modal";
-    const modal = await openModal(page);
-
-    stage = "read-availability";
-    const available = await readAvailability(page, modal);
-
+    session = await openSession(account);
+    const available = await readAvailability(session.page, session.modal);
     return { ok: true, available };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    log(`FAILED at stage "${stage}": ${reason}`);
-    let shot: string | undefined;
-    // Only screenshot for non-network failures (markup/selector issues worth
-    // seeing), and only if enabled — protects the old SD from frequent writes.
-    if (page && config.saveScreenshots && !isNetworkError(reason)) {
-      shot = await screenshot(page, `fail-${stage}`);
-      log("screenshot:", shot);
-    }
-    return { ok: false, stage, reason, screenshot: shot };
+    const se = err as StageError;
+    log(`FAILED at stage "${se.stage ?? stage}": ${reason}`);
+    return {
+      ok: false,
+      stage: se.stage ?? stage,
+      reason,
+      screenshot: se.screenshot,
+    };
   } finally {
-    await context?.close().catch(() => {});
-    await browser?.close().catch(() => {});
+    await session?.close();
   }
+}
+
+/** Back-compat wrapper used by check-once and the watcher's default. */
+export async function runScrape(): Promise<ScrapeResult> {
+  return checkAvailability(config.accounts[0]);
 }
