@@ -27,8 +27,16 @@ real en vez de replicar los requests HTTP, que serían mucho más frágiles.
 
 - Node.js 22+ (hay un `.nvmrc`; corre `nvm use`)
 - pnpm 11 (via corepack: `corepack enable`)
-- Una cuenta en [fly.io](https://fly.io) (para hosting 24/7)
+- Un host con **IP de Perú** (ver abajo) — una **Raspberry Pi** en tu casa
 - Un bot de Telegram
+
+## ⚠️ El host debe estar en Perú
+
+El sitio de la PNP **rechaza conexiones desde IPs fuera de Perú** (verificado: desde
+un datacenter en Brasil da `Connection refused`; desde una IP peruana da HTTP 200).
+Por eso **no se puede hostear en la nube** (fly.io / AWS / etc.): hay que correrlo
+desde una conexión peruana. El host elegido es una **Raspberry Pi 4** en tu red de
+casa. Guía completa: [`deploy/raspberry-pi-setup.md`](deploy/raspberry-pi-setup.md).
 
 ## 1. Crear el bot de Telegram
 
@@ -88,7 +96,7 @@ SIMULATE_CUPOS=true pnpm dev
 ```
 
 Recibirás una alerta "🚨 ¡CUPOS DISPONIBLES!" real. **No** actives esta variable
-en producción (déjala fuera de los `fly secrets` y del `fly.toml`).
+en producción (déjala fuera del `.env` de la Raspberry Pi).
 
 Correr el watcher completo (con scheduler + Telegram):
 
@@ -96,22 +104,22 @@ Correr el watcher completo (con scheduler + Telegram):
 pnpm dev
 ```
 
-## 4. Desplegar en fly.io
+## 4. Desplegar 24/7 en la Raspberry Pi
 
-```bash
-fly launch --no-deploy                 # crea la app (usa el fly.toml incluido)
-fly volumes create data --size 1 --region scl
-fly secrets set \
-  PNP_DNI=70886597 \
-  PNP_CLAVE='tu-clave' \
-  TELEGRAM_BOT_TOKEN='123456:ABC-...' \
-  TELEGRAM_CHAT_ID='123456789'
-fly deploy
-fly logs           # ver los ciclos cada 5 min
-```
+El despliegue de producción corre en una Raspberry Pi 4 en Perú, con `systemd`
+(arranca al bootear, se reinicia solo ante fallos) y un dead-man's-switch de
+[healthchecks.io](https://healthchecks.io) que te avisa si la Pi o el internet se caen.
 
-El resto de la configuración (sede, cron, heartbeat) está en `[env]` de `fly.toml`
-y puede ajustarse ahí o con `fly secrets set`.
+👉 Sigue la guía paso a paso: [`deploy/raspberry-pi-setup.md`](deploy/raspberry-pi-setup.md)
+(unit de systemd: [`deploy/lunas-watcher.service`](deploy/lunas-watcher.service)).
+
+### Resiliencia ante caídas
+
+- **Corte breve de internet:** los ciclos fallan en silencio y se reanudan solos; si
+  dura, recibes "⚠️ degradado" y luego "✅ recuperado".
+- **Corte de luz / reinicio:** systemd vuelve a arrancar el watcher al bootear la Pi.
+- **Pi/internet caídos por un rato largo:** healthchecks.io deja de recibir pings y te
+  manda un correo/alerta.
 
 ## Configuración (variables de entorno)
 
@@ -128,7 +136,8 @@ y puede ajustarse ahí o con `fly secrets set`.
 | `HEARTBEAT_HOURS` | `6` | Cada cuántas horas manda "sigo vivo" |
 | `FAILURE_ALERT_THRESHOLD` | `3` | Fallos seguidos antes de alertar "degradado" |
 | `HEADLESS` | `true` | `false` para ver el navegador en local |
-| `DATA_DIR` | `./data` | Carpeta de estado + capturas (volumen en fly) |
+| `DATA_DIR` | `./data` | Carpeta de estado + capturas de fallo |
+| `HEALTHCHECK_URL` | (vacío) | URL de healthchecks.io; se pingea cada ciclo (dead-man's-switch) |
 
 ## Notas / riesgos
 
