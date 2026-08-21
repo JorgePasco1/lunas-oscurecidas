@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { assertTelegramConfigured, config } from "./config.js";
 import { ensureDataDir } from "./state.js";
 import { esc, sendTelegram } from "./telegram.js";
+import { pingHealthcheck } from "./health.js";
 import { maybeHeartbeat, runCycle } from "./watcher.js";
 
 let running = false;
@@ -15,6 +16,9 @@ async function tick(): Promise<void> {
   try {
     await runCycle();
     await maybeHeartbeat();
+    // Liveness ping AFTER the cycle completed: proves the loop ran and has
+    // internet. If this stops (power/internet down), the external monitor alerts.
+    await pingHealthcheck();
   } catch (err) {
     // runCycle handles its own errors; this is a last-resort guard.
     console.error("[index] unexpected error in tick:", err);

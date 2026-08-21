@@ -1,0 +1,26 @@
+[Unit]
+Description=Lunas Oscurecidas cupo watcher
+# Wait for the network before starting; keep retrying if it isn't up yet.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/lunas-oscurecidas
+# The app loads .env itself (via dotenv), so WorkingDirectory is what matters.
+ExecStart=/usr/bin/node dist/index.js
+
+# Resilience: restart on any exit (crash, unhandled error, OOM) and on reboot.
+Restart=always
+RestartSec=10
+# If it crash-loops, don't hammer forever within a short window.
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+# Logs go to the journal: view with `journalctl -u lunas-watcher -f`
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

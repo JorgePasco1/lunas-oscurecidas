@@ -45,6 +45,9 @@ export const config = {
   },
   dataDir: optional("DATA_DIR", "./data"),
   headless: optional("HEADLESS", "true").toLowerCase() !== "false",
+  // Optional dead-man's-switch ping URL (e.g. healthchecks.io). Pinged once per
+  // cycle so an external monitor alerts you if the Pi/internet goes down.
+  healthcheckUrl: optional("HEALTHCHECK_URL", ""),
 };
 
 export type Config = typeof config;
