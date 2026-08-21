@@ -6,15 +6,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/lunas-oscurecidas
+User=jorgepasco1
+WorkingDirectory=/home/jorgepasco1/lunas-oscurecidas
 # The app loads .env itself (via dotenv), so WorkingDirectory is what matters.
+# Node from NodeSource lives at /usr/bin/node.
 ExecStart=/usr/bin/node dist/index.js
 
 # Resilience: restart on any exit (crash, unhandled error, OOM) and on reboot.
 Restart=always
 RestartSec=10
-# If it crash-loops, don't hammer forever within a short window.
+# If it crash-loops, back off instead of hammering the flaky link forever.
 StartLimitIntervalSec=300
 StartLimitBurst=20
 

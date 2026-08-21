@@ -59,9 +59,37 @@ async function optionLabels(select: Locator): Promise<string[]> {
 async function screenshot(page: Page, name: string): Promise<string> {
   const dir = path.join(config.dataDir, "screenshots");
   await fs.mkdir(dir, { recursive: true });
+  // Stable filename per stage (overwrites) so failures don't accumulate PNGs on
+  // the SD card.
   const file = path.join(dir, `${name}.png`);
   await page.screenshot({ path: file, fullPage: true }).catch(() => {});
   return file;
+}
+
+/** True for connectivity failures (WiFi blip, site refusing the connection,
+ *  DNS). A screenshot of these is a blank page — useless — and on a flaky link
+ *  they'd be frequent, so we don't write them to the SD card. */
+function isNetworkError(reason: string): boolean {
+  return /ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|ERR_NETWORK|ERR_INTERNET|ERR_ADDRESS|ERR_TIMED_OUT|ERR_SOCKET|net::|Timeout.*exceeded.*goto|NS_ERROR/i.test(
+    reason
+  );
+}
+
+/** Navigate with a couple of retries — the 2.4GHz link on the Pi is the flaky
+ *  part, and a transient blip on the first request shouldn't fail the cycle. */
+async function gotoWithRetry(page: Page, url: string): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+      return;
+    } catch (err) {
+      lastErr = err;
+      log(`goto attempt ${attempt} failed: ${String(err)}`);
+      if (attempt < 3) await page.waitForTimeout(2000 * attempt);
+    }
+  }
+  throw lastErr;
 }
 
 /** Click something addressed by visible text, trying button → link → any. */
@@ -81,10 +109,7 @@ async function clickByText(page: Page, name: string | RegExp): Promise<void> {
 
 async function login(page: Page): Promise<void> {
   log("navigating to menu");
-  await page.goto(config.site.menuUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: NAV_TIMEOUT,
-  });
+  await gotoWithRetry(page, config.site.menuUrl);
 
   // Concrete ASP.NET control ids, confirmed against the live login DOM.
   // (Regex placeholders are ambiguous here — the page hides several other
@@ -337,6 +362,7 @@ export async function runScrape(): Promise<ScrapeResult> {
   try {
     browser = await chromium.launch({
       headless: config.headless,
+      executablePath: config.chromiumPath || undefined,
       args: ["--no-sandbox", "--disable-dev-shm-usage"],
     });
     context = await browser.newContext({
@@ -365,9 +391,10 @@ export async function runScrape(): Promise<ScrapeResult> {
     const reason = err instanceof Error ? err.message : String(err);
     log(`FAILED at stage "${stage}": ${reason}`);
     let shot: string | undefined;
-    if (page) {
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      shot = await screenshot(page, `fail-${stage}-${stamp}`);
+    // Only screenshot for non-network failures (markup/selector issues worth
+    // seeing), and only if enabled — protects the old SD from frequent writes.
+    if (page && config.saveScreenshots && !isNetworkError(reason)) {
+      shot = await screenshot(page, `fail-${stage}`);
       log("screenshot:", shot);
     }
     return { ok: false, stage, reason, screenshot: shot };

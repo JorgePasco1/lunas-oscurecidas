@@ -45,6 +45,14 @@ export const config = {
   },
   dataDir: optional("DATA_DIR", "./data"),
   headless: optional("HEADLESS", "true").toLowerCase() !== "false",
+  // Use a system-installed Chromium (e.g. /usr/bin/chromium on Raspberry Pi OS)
+  // instead of Playwright's downloaded build. Avoids the ~150MB SD write and the
+  // Debian-trixie dep mismatch. Empty = Playwright's bundled Chromium.
+  chromiumPath: optional("CHROMIUM_PATH", ""),
+  // On an old microSD we want to minimize writes. Failure screenshots are only
+  // written for non-network failures (a blank page from a refused connection is
+  // useless), and overwrite a single file per stage. Set false to disable fully.
+  saveScreenshots: optional("SAVE_SCREENSHOTS", "true").toLowerCase() !== "false",
   // Optional dead-man's-switch ping URL (e.g. healthchecks.io). Pinged once per
   // cycle so an external monitor alerts you if the Pi/internet goes down.
   healthcheckUrl: optional("HEALTHCHECK_URL", ""),

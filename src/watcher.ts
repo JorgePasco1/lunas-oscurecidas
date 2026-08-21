@@ -11,6 +11,33 @@ import {
 
 const MENU_URL = config.site.menuUrl;
 
+// In-memory state for the life of the process. Loaded from disk once; we only
+// write back on *material* change to spare the Pi's old microSD. Volatile fields
+// (lastSuccessAt, cyclesOkSinceHeartbeat) live in memory and get persisted
+// opportunistically whenever a material write happens.
+let mem: WatcherState | null = null;
+async function getMem(): Promise<WatcherState> {
+  if (!mem) mem = await loadState();
+  return mem;
+}
+
+/** Signature of the fields whose change justifies a disk write. */
+function materialSig(s: WatcherState): string {
+  return JSON.stringify({
+    a: [...s.alertedKeys].sort(),
+    f: s.failureStreak,
+    d: s.degradedNotified,
+    h: s.lastHeartbeatAt,
+  });
+}
+
+async function persistIfMaterial(
+  state: WatcherState,
+  sigBefore: string
+): Promise<void> {
+  if (materialSig(state) !== sigBefore) await saveState(state);
+}
+
 function fmtSlots(slots: SlotInfo[]): string {
   // Group horas by fecha for a compact message.
   const byFecha = new Map<string, SlotInfo[]>();
@@ -33,7 +60,8 @@ function fmtSlots(slots: SlotInfo[]): string {
 export async function runCycle(
   scrape: () => Promise<ScrapeResult> = runScrape
 ): Promise<WatcherState> {
-  const state = await loadState();
+  const state = await getMem();
+  const sigBefore = materialSig(state);
   const result = await scrape();
   const now = new Date();
 
@@ -55,7 +83,7 @@ export async function runCycle(
       );
       state.degradedNotified = true;
     }
-    await saveState(state);
+    await persistIfMaterial(state, sigBefore);
     return state;
   }
 
@@ -93,13 +121,13 @@ export async function runCycle(
   // disappears and reappears will alert again.
   state.alertedKeys = [...currentKeys];
 
-  await saveState(state);
+  await persistIfMaterial(state, sigBefore);
   return state;
 }
 
 /** Send the periodic "still alive" heartbeat if enough time has elapsed. */
 export async function maybeHeartbeat(force = false): Promise<void> {
-  const state = await loadState();
+  const state = await getMem();
   const now = Date.now();
   const intervalMs = config.schedule.heartbeatHours * 3600_000;
   const last = state.lastHeartbeatAt ? Date.parse(state.lastHeartbeatAt) : 0;

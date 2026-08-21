@@ -1,132 +1,156 @@
-# Raspberry Pi setup (the real host)
+# Raspberry Pi setup (the production host)
 
 The PNP site **refuses connections from non-Peru IPs** (confirmed: fly/São Paulo gets
-`Connection refused`, a Peru IP gets HTTP 200). So the watcher must run from a Peru
-internet connection. A **Raspberry Pi 4** on your home network is the host.
+`Connection refused`; a Peru IP gets HTTP 200). So the watcher runs from a **Raspberry
+Pi 4** on home internet in Peru.
 
-Three resilience layers guard against outages:
-1. The watcher treats "no internet" like "site down" — retries next cycle, never crashes.
-2. **systemd** auto-starts it on boot and restarts it on any crash (`Restart=always`).
-3. A **healthchecks.io** dead-man's-switch alerts *you* if the Pi/internet goes down
-   (the one case our own Telegram can't cover).
+## This Pi (verified 2026-08-21)
+
+| Item | Value |
+|---|---|
+| Host / user | `JorgePi` / `jorgepasco1` |
+| SSH alias (Mac) | `ssh jorgepi` (→ `192.168.0.56`, ed25519 key) |
+| OS | Raspberry Pi OS 64-bit **Desktop**, Debian 13 (trixie), aarch64 |
+| Chromium | ships with the image (system package — we use it directly) |
+| Remote (off-LAN) | Raspberry Pi Connect (installed, signed in, verified) |
+
+> ⚠️ **SSH KEX caveat.** The Mac's OpenSSH 10.2 defaults to a post-quantum KEX that
+> **hangs** against this Pi. The `jorgepi` alias in `~/.ssh/config` pins
+> `KexAlgorithms curve25519-sha256`. Any tool opening its own SSH connection
+> (`rsync`, `scp`, `git+ssh`) must use the `jorgepi` alias **or** pass
+> `-o KexAlgorithms=curve25519-sha256`. Plain `rsync host:...` will hang.
+
+Design constraints baked into the code and this guide: **headless only**, **systemd with
+`Restart=always`** (survives the power cuts this box will see — no UPS, operator
+traveling), **minimize microSD writes** (old card), **retries on every outbound call**
+(2.4GHz WiFi at -67 dBm, no wired fallback).
 
 ---
-
-## 0. Flash the OS (once)
-
-1. On your Mac, install **Raspberry Pi Imager** (https://www.raspberrypi.com/software/).
-2. Choose **Raspberry Pi OS (64-bit)** — Lite is enough (headless, no desktop).
-   > 64-bit is required for Playwright's Chromium on ARM.
-3. In Imager's ⚙️ settings before writing:
-   - Set a **hostname** (e.g. `lunaspi`)
-   - **Enable SSH** (password or key)
-   - Set **username** `pi` and a password
-   - Configure **Wi-Fi** (or use ethernet) + your country/locale
-4. Write the SD card, boot the Pi, wait ~1 min.
 
 ## 1. SSH in (from your Mac)
 
 ```bash
-ssh pi@lunaspi.local     # or ssh pi@<pi-ip-address>
+ssh jorgepi
 ```
 
-## 2. Install Node 22 + pnpm (system-wide, so systemd can find node)
+## 2. Install Node 22 + pnpm (system-wide, so systemd finds `node`)
+
+`sudo` needs your password on this box.
 
 ```bash
 sudo apt-get update
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs git
-node --version           # expect v22.x
-sudo corepack enable     # provides pnpm
-```
+node --version            # expect v22.x
+sudo corepack enable      # provides pnpm
 
-## 3. Get the code onto the Pi
-
-Option A — clone from your git remote (if you push it there):
-```bash
-cd ~
-git clone <your-repo-url> lunas-oscurecidas
-cd lunas-oscurecidas
+# Confirm the system Chromium path (used instead of downloading Playwright's):
+which chromium || which chromium-browser
 ```
-Option B — copy from your Mac with rsync (run this **on your Mac**):
+Note that path — usually `/usr/bin/chromium` on trixie.
+
+## 3. Copy the code onto the Pi (from your Mac)
+
+Use the `jorgepi` alias so rsync's SSH doesn't hang on the KEX:
+
 ```bash
 rsync -av --exclude node_modules --exclude dist --exclude data \
-  ~/dev/projects/lunas-oscurecidas/ pi@lunaspi.local:/home/pi/lunas-oscurecidas/
+  ~/dev/projects/lunas-oscurecidas/ jorgepi:/home/jorgepasco1/lunas-oscurecidas/
 ```
+(Or `git clone` if you push to a remote.)
 
-## 4. Install deps + Chromium (with OS libraries)
+## 4. Install deps + build (no browser download)
 
+Back on the Pi:
 ```bash
 cd ~/lunas-oscurecidas
 pnpm install --frozen-lockfile
-pnpm exec playwright install --with-deps chromium     # arm64 Chromium + apt deps
 pnpm run build
 ```
+We deliberately **skip** `playwright install` — we point Playwright at the system
+Chromium via `CHROMIUM_PATH` (next step). That avoids a ~150MB SD write and the
+Debian-trixie dependency mismatch.
 
-## 5. Create the `.env`
+## 5. Create `.env`
 
 ```bash
 nano .env
 ```
-Fill in (see `.env.example` for all keys):
 ```
 PNP_DNI=70886597
 PNP_CLAVE=your-password
 TELEGRAM_BOT_TOKEN=8301731075:AAG...
 TELEGRAM_CHAT_ID=1542531417
 TARGET_SEDE=LIMA-LA VICTORIA
-HEALTHCHECK_URL=          # from step 7, paste after creating the check
 HEADLESS=true
+CHROMIUM_PATH=/usr/bin/chromium     # the path from step 2
+HEALTHCHECK_URL=                    # from step 7
 ```
 
-## 6. Smoke-test once before installing the service
+## 6. Smoke-test once
 
 ```bash
-DUMP_DOM=false pnpm check     # should end with "no cupos available right now"
+DUMP_DOM=false pnpm check
 ```
-If that works, the Pi can reach the site and log in. 🎉
+Expected: ends with `no cupos available right now`. If it logs in and reads the modal,
+the Pi can reach the site with the system Chromium. 🎉
+(If Chromium fails to launch, fall back to Playwright's build: `pnpm exec playwright
+install chromium` and remove `CHROMIUM_PATH` from `.env`.)
 
-## 7. Set up the dead-man's-switch (healthchecks.io, free)
+## 7. Dead-man's-switch (healthchecks.io, free)
 
-1. Sign up at https://healthchecks.io (free tier).
-2. Create a check: **period = 5 min**, **grace = 15 min** (alerts if no ping for ~20 min).
-3. Add your email (and/or Telegram) as the notification method.
-4. Copy the check's **ping URL** and paste it as `HEALTHCHECK_URL=` in `.env`.
+1. Sign up at https://healthchecks.io.
+2. New check: **period 5 min**, **grace 15 min** (alerts after ~20 min of silence).
+3. Add email (and/or Telegram) as the notification.
+4. Paste the ping URL into `HEALTHCHECK_URL=` in `.env`.
 
-## 8. Install the systemd service (auto-start + auto-restart)
+The watcher pings it every cycle. If the Pi loses power/internet, pings stop and
+healthchecks.io alerts you — the one failure the bot's own Telegram can't send.
+
+## 8. Cap journald writes (protect the microSD)
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=50M\nSystemMaxFileSize=10M\nRuntimeMaxUse=50M\n' \
+  | sudo tee /etc/systemd/journald.conf.d/cap.conf
+sudo systemctl restart systemd-journald
+```
+
+## 9. Install the service (auto-start + auto-restart)
 
 ```bash
 sudo cp ~/lunas-oscurecidas/deploy/lunas-watcher.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now lunas-watcher
+systemctl status lunas-watcher
+journalctl -u lunas-watcher -f      # watch a cycle; expect "🟢 Watcher iniciado" in Telegram
 ```
 
-Check it:
-```bash
-systemctl status lunas-watcher
-journalctl -u lunas-watcher -f      # live logs; watch a cycle run
-```
-You should get the "🟢 Watcher iniciado" Telegram message.
+---
+
+## Open item: pin the IP
+
+Set a **DHCP reservation** for the Pi's WiFi MAC on your router so `192.168.0.56`
+survives outages (otherwise the `jorgepi` alias can break after a long downtime).
+Even if it changes, **Raspberry Pi Connect** (`connect.raspberrypi.com`) still reaches
+the shell, since it doesn't depend on the LAN IP.
 
 ## Everyday operations
 
 ```bash
-journalctl -u lunas-watcher -f          # follow logs
-sudo systemctl restart lunas-watcher    # restart
-sudo systemctl stop lunas-watcher       # stop
+journalctl -u lunas-watcher -f              # follow logs
+sudo systemctl restart lunas-watcher        # restart
 ```
-
-Update after code changes (rsync/pull the new code, then):
+Update after code changes — rsync/pull, then on the Pi:
 ```bash
 cd ~/lunas-oscurecidas && pnpm install --frozen-lockfile && pnpm run build \
   && sudo systemctl restart lunas-watcher
 ```
 
-## Outage behaviour (what to expect)
+## Outage behaviour
 
-- **Brief internet blip:** cycles fail quietly, then resume; you may get a
-  "⚠️ degraded" then "✅ recovered" if it lasts past the threshold.
-- **Power outage / reboot:** systemd restarts the watcher automatically when the Pi
-  boots; state on disk is intact.
-- **Prolonged Pi/internet down:** healthchecks.io stops receiving pings and emails you.
-  When it recovers, pings resume.
+- **WiFi blip:** cycle retries in-place (nav + Telegram have backoff); if it lasts past
+  the threshold you get "⚠️ degradado" then "✅ recuperado".
+- **Power cut / reboot:** systemd restarts the watcher on boot; state on disk is intact
+  (atomic writes survive a mid-write power loss).
+- **Prolonged Pi/internet down:** healthchecks.io stops getting pings → it emails you.
