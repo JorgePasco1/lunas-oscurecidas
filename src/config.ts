@@ -39,7 +39,7 @@ export const config = {
     chatId: optional("TELEGRAM_CHAT_ID", ""),
   },
   schedule: {
-    checkCron: optional("CHECK_CRON", "*/5 * * * *"),
+    checkCron: optional("CHECK_CRON", "*/2 * * * *"),
     heartbeatHours: optionalInt("HEARTBEAT_HOURS", 6),
     failureAlertThreshold: optionalInt("FAILURE_ALERT_THRESHOLD", 3),
   },

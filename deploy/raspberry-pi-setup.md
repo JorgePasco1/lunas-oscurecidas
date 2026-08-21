@@ -100,7 +100,8 @@ install chromium` and remove `CHROMIUM_PATH` from `.env`.)
 ## 7. Dead-man's-switch (healthchecks.io, free)
 
 1. Sign up at https://healthchecks.io.
-2. New check: **period 5 min**, **grace 15 min** (alerts after ~20 min of silence).
+2. New check: **period 2 min** (match `CHECK_CRON`), **grace 10 min** (alerts after
+   ~12 min of silence).
 3. Add email (and/or Telegram) as the notification.
 4. Paste the ping URL into `HEALTHCHECK_URL=` in `.env`.
 

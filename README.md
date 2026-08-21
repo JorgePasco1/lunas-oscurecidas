@@ -1,6 +1,6 @@
 # Lunas Oscurecidas — Watcher de Cupos
 
-Un bot que revisa cada 5 minutos el sistema de la PNP
+Un bot que revisa cada 2 minutos el sistema de la PNP
 (`sistemas.policia.gob.pe/lunasoscurecidas`), abre la ventana **Reserva de Citas**
 de tu expediente y avisa por **Telegram** apenas se abran cupos en la sede que vigilas
 (por defecto **LIMA-LA VICTORIA**). No reserva por ti — solo te avisa para que entres
@@ -132,7 +132,7 @@ El despliegue de producción corre en una Raspberry Pi 4 en Perú, con `systemd`
 | `TARGET_SEDE` | `LIMA-LA VICTORIA` | Sede a vigilar (texto exacto del dropdown) |
 | `TELEGRAM_BOT_TOKEN` | — | Token de @BotFather |
 | `TELEGRAM_CHAT_ID` | — | Tu chat id |
-| `CHECK_CRON` | `*/5 * * * *` | Frecuencia del chequeo |
+| `CHECK_CRON` | `*/2 * * * *` | Frecuencia del chequeo (usa `*/1` para máxima cobertura) |
 | `HEARTBEAT_HOURS` | `6` | Cada cuántas horas manda "sigo vivo" |
 | `FAILURE_ALERT_THRESHOLD` | `3` | Fallos seguidos antes de alertar "degradado" |
 | `HEADLESS` | `true` | `false` para ver el navegador en local |
