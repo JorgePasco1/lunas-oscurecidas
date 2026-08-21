@@ -32,6 +32,8 @@ export interface BookingResult {
   slot?: SlotInfo;
   reason?: string;
   screenshot?: string;
+  /** Extra info surfaced in messages, e.g. the solved captcha. */
+  note?: string;
 }
 
 /** Result of one scrape cycle. Success and failure are never conflated: a site

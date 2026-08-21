@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { config } from "./config.js";
 import {
   openSession,
@@ -24,6 +25,26 @@ const BTN_RESERVAR = "#MainContent_idUcitas_btgSiguiente";
 const BTN_CONFIRMAR = "#MainContent_idUcitas_btnValidaAcepta";
 const BTN_CANCELAR_RESERVA = "#MainContent_idUcitas_btnValidaCancelar";
 const BTN_CERRAR_OK = "#MainContent_idUcitas_bntcerrarelim";
+// "Validación de Seguridad" — an arithmetic captcha (class captcha-suma-txt)
+// that must be solved into the Resultado field before clicking Reservar Cita.
+const CAPTCHA_LABEL = "#MainContent_idUcitas_lblCaptchaOperacion";
+const CAPTCHA_INPUT = "#MainContent_idUcitas_txtimg";
+
+/** Read the captcha challenge (e.g. "53 + 31 = ?") and compute the answer.
+ *  Supports +, -, × just in case, though the field is labelled "suma". */
+async function solveCaptcha(
+  page: Page
+): Promise<{ challenge: string; answer: number } | null> {
+  const raw = (await page.locator(CAPTCHA_LABEL).innerText().catch(() => "")) || "";
+  const challenge = raw.trim();
+  const m = challenge.match(/(-?\d+)\s*([+\-x*×])\s*(-?\d+)/i);
+  if (!m) return null;
+  const a = parseInt(m[1], 10);
+  const b = parseInt(m[3], 10);
+  const op = m[2];
+  const answer = op === "+" ? a + b : op === "-" ? a - b : a * b;
+  return { challenge, answer };
+}
 
 /** Decide which slot each unbooked account should target.
  *  - sameSlot: everyone aims at the earliest slot that fits all of them
@@ -75,25 +96,53 @@ export async function bookForAccount(
       cupos: target.cupos,
     };
 
+    // Solve the arithmetic captcha and fill the Resultado field (required before
+    // Reservar Cita). Harmless in dry-run (nothing is submitted).
+    const cap = await solveCaptcha(page);
+    if (cap) {
+      await page.locator(CAPTCHA_INPUT).fill(String(cap.answer)).catch(() => {});
+      log(`captcha "${cap.challenge}" -> ${cap.answer}`);
+    } else {
+      log("captcha not found/parsed");
+    }
+    const capNote = cap
+      ? `captcha ${cap.challenge.replace(/\s*=.*/, "")} = ${cap.answer}`
+      : "captcha NOT parsed";
+
     if (dryRun) {
-      let shot: string | undefined;
-      if (config.saveScreenshots) {
-        shot = await screenshot(page, `dryrun-${account.label}`).catch(
-          () => undefined
-        );
-      }
+      const shot = config.saveScreenshots
+        ? await screenshot(page, `dryrun-${account.label}`).catch(() => undefined)
+        : undefined;
       // Opt-in probe: reveal the confirm screen without committing, then abort.
       if ((process.env.DRY_RUN_PROBE ?? "").toLowerCase() === "true") {
         await probeConfirmScreen(session, account);
       }
-      log(`DRY RUN — would book ${account.label}: ${target.fecha} ${target.hora}`);
-      return { account: account.label, ok: true, dryRun: true, slot, screenshot: shot };
+      log(`DRY RUN — would book ${account.label}: ${target.fecha} ${target.hora} (${capNote})`);
+      return {
+        account: account.label,
+        ok: true,
+        dryRun: true,
+        slot,
+        screenshot: shot,
+        note: capNote,
+      };
     }
 
     // ---- LIVE booking (only when DRY_RUN_BOOKING=false) ----
-    log(`LIVE booking ${account.label}: ${target.fecha} ${target.hora}`);
+    if (!cap) {
+      return {
+        account: account.label,
+        ok: false,
+        dryRun: false,
+        slot,
+        reason: "could not read/solve captcha — aborted before booking",
+      };
+    }
+    log(`LIVE booking ${account.label}: ${target.fecha} ${target.hora} (${capNote})`);
     await page.locator(BTN_RESERVAR).click({ timeout: 20_000 });
     await settle(page, 1200);
+    // Confirm panel (PanelValidar) appears; wait for its accept button.
+    await page.locator(BTN_CONFIRMAR).waitFor({ state: "visible", timeout: 15_000 });
     await page.locator(BTN_CONFIRMAR).click({ timeout: 20_000 });
     await settle(page, 1500);
 
@@ -135,6 +184,9 @@ export async function bookForAccount(
  *  then click the safe Cancelar to abort. Teaches us the real confirm DOM. */
 async function probeConfirmScreen(session: Session, account: Account): Promise<void> {
   const { page } = session;
+  // Solve the captcha first, else Reservar Cita won't advance to the confirm panel.
+  const cap = await solveCaptcha(page);
+  if (cap) await page.locator(CAPTCHA_INPUT).fill(String(cap.answer)).catch(() => {});
   log(`PROBE — clicking Reservar Cita to reveal confirm screen (${account.label})`);
   await page.locator(BTN_RESERVAR).click({ timeout: 20_000 }).catch((e) => {
     log("probe: Reservar Cita click failed:", String(e));
@@ -198,7 +250,9 @@ export function fmtBookingResults(results: BookingResult[]): string {
   const lines = results.map((r) => {
     const who = `<b>${r.account}</b>`;
     if (r.ok && r.dryRun)
-      return `🧪 ${who}: SIMULACRO — reservaría ${r.slot?.fecha} ${r.slot?.hora}`;
+      return `🧪 ${who}: SIMULACRO — reservaría ${r.slot?.fecha} ${r.slot?.hora}${
+        r.note ? ` · ${r.note}` : ""
+      }`;
     if (r.ok) return `✅ ${who}: RESERVADO ${r.slot?.fecha} ${r.slot?.hora}`;
     return `⚠️ ${who}: no reservado — ${r.reason}`;
   });
