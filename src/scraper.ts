@@ -67,7 +67,29 @@ export async function screenshot(page: Page, name: string): Promise<string> {
   // the SD card.
   const file = path.join(dir, `${name}.png`);
   await page.screenshot({ path: file, fullPage: true }).catch(() => {});
+  await enforceScreenshotCap(dir).catch(() => {});
   return file;
+}
+
+/** Keep the screenshots folder under config.screenshotMaxMB by deleting the
+ *  oldest files first. The just-written file is newest, so it is never pruned. */
+async function enforceScreenshotCap(dir: string): Promise<void> {
+  const maxBytes = Math.max(1, config.screenshotMaxMB) * 1024 * 1024;
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  const files: { p: string; size: number; mtime: number }[] = [];
+  for (const n of names) {
+    const p = path.join(dir, n);
+    const st = await fs.stat(p).catch(() => null);
+    if (st?.isFile()) files.push({ p, size: st.size, mtime: st.mtimeMs });
+  }
+  let total = files.reduce((s, f) => s + f.size, 0);
+  if (total <= maxBytes) return;
+  files.sort((a, b) => a.mtime - b.mtime); // oldest first
+  for (const f of files) {
+    if (total <= maxBytes) break;
+    await fs.unlink(f.p).catch(() => {});
+    total -= f.size;
+  }
 }
 
 /** True for connectivity failures (WiFi blip, site refusing the connection,

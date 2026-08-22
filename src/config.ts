@@ -95,6 +95,10 @@ export const config = {
   // written for non-network failures (a blank page from a refused connection is
   // useless), and overwrite a single file per stage. Set false to disable fully.
   saveScreenshots: optional("SAVE_SCREENSHOTS", "true").toLowerCase() !== "false",
+  // Hard ceiling on the screenshots folder. After saving one, oldest files are
+  // pruned until the total is under this many MB. Protects the SD from ever
+  // filling with screenshots.
+  screenshotMaxMB: optionalInt("SCREENSHOT_MAX_MB", 100),
   // Optional dead-man's-switch ping URL (e.g. healthchecks.io). Pinged once per
   // cycle so an external monitor alerts you if the Pi/internet goes down.
   healthcheckUrl: optional("HEALTHCHECK_URL", ""),
