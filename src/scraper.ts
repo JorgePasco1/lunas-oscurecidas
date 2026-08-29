@@ -165,23 +165,24 @@ async function login(page: Page, account: Account): Promise<void> {
 }
 
 async function openExpediente(page: Page, account: Account): Promise<void> {
-  // Pick the target row (by expediente number if configured, else the first).
-  let row: Locator;
+  // The "Acciones" eye icon is an <a id="...gvProgramacion_btnAccion_N">. These
+  // links exist ONLY on real data rows, so they skip empty sub-tables like
+  // "Programación de Expedientes / 0 registros" that break a naive first-row pick.
+  let action: Locator;
   if (account.expediente) {
-    row = page.locator("tr", { hasText: account.expediente }).first();
+    // Pin to the row containing this expediente number, then its action link.
+    const row = page.locator("tr", { hasText: account.expediente }).first();
+    await row.waitFor({ state: "visible", timeout: STEP_TIMEOUT });
+    await dump("solicitudes table row", async () => {
+      console.log("row HTML:", await row.innerHTML());
+    });
+    const inRow = row.locator("a[id*='btnAccion'], a, button");
+    action = (await inRow.count()) ? inRow.last() : row.locator("a, button").last();
   } else {
-    // First data row of the solicitudes table.
-    row = page.locator("table tbody tr").first();
+    // No expediente pinned: take the first real action link on the page.
+    action = page.locator("a[id*='btnAccion']").first();
+    await action.waitFor({ state: "visible", timeout: STEP_TIMEOUT });
   }
-  await row.waitFor({ state: "visible", timeout: STEP_TIMEOUT });
-
-  await dump("solicitudes table row", async () => {
-    console.log("row HTML:", await row.innerHTML());
-  });
-
-  // The "Acciones" cell holds an eye icon (link or button). Click the last
-  // interactive element in the row.
-  const action = row.locator("a, button").last();
   await action.click({ timeout: STEP_TIMEOUT });
 
   await page

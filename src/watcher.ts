@@ -31,6 +31,7 @@ function materialSig(s: WatcherState): string {
     d: s.degradedNotified,
     h: s.lastHeartbeatAt,
     b: Object.keys(s.booked).sort(),
+    x: s.bookingHalted,
   });
 }
 
@@ -123,7 +124,7 @@ export async function runCycle(
   }
 
   // ---- Auto-booking ----
-  if (config.booking.enabled && available.length > 0) {
+  if (config.booking.enabled && available.length > 0 && !state.bookingHalted) {
     const unbooked = config.accounts.filter((a) => !state.booked[a.label]);
     // Live: retry every cycle until booked. Dry-run: only act on NEW slots so we
     // don't re-report "would book" every 2 minutes while a slot lingers.
@@ -149,6 +150,21 @@ export async function runCycle(
         ? `🧪 <b>SIMULACRO de reserva</b> (dry-run)`
         : `📩 <b>Intento de reserva</b>`;
       await sendTelegram(`${header}\n${fmtBookingResults(results)}`, { attempts: 6 });
+
+      // Identical-or-nothing guard: if a LIVE attempt booked some but not all,
+      // halt — never place the rest at a different slot. Needs manual coordination.
+      if (!config.booking.dryRun) {
+        const succeeded = results.filter((r) => r.ok && !r.dryRun).length;
+        if (succeeded > 0 && succeeded < unbooked.length) {
+          state.bookingHalted = true;
+          await sendTelegram(
+            `⚠️ <b>RESERVA PARCIAL</b> — se reservó para ${succeeded}/${unbooked.length}. ` +
+              `Detuve el auto-booking para no separarlos en horarios distintos. ` +
+              `Coordina/cancela manualmente y avísame para reanudar.`,
+            { attempts: 6 }
+          );
+        }
+      }
     }
   }
 

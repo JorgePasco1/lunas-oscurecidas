@@ -60,6 +60,10 @@ export interface WatcherState {
    *  done and we stop trying to book for it. Only set for real (non-dry-run)
    *  bookings. */
   booked: Record<string, BookingRecord>;
+  /** Set true after a PARTIAL live booking (some accounts booked, others not).
+   *  Honors "identical or nothing": we stop auto-booking so we never place the
+   *  remaining people at a different slot. Requires manual resolution. */
+  bookingHalted: boolean;
 }
 
 export const initialState: WatcherState = {
@@ -70,6 +74,7 @@ export const initialState: WatcherState = {
   lastSuccessAt: null,
   cyclesOkSinceHeartbeat: 0,
   booked: {},
+  bookingHalted: false,
 };
 
 /** Stable identity for a slot, used for alert de-duplication. */

@@ -15,6 +15,9 @@ process.env.PNP_CLAVE = "x";
 process.env.TELEGRAM_BOT_TOKEN = "test";
 process.env.TELEGRAM_CHAT_ID = "test";
 process.env.FAILURE_ALERT_THRESHOLD = "2";
+// This test exercises the alert/failure state machine only — never real booking.
+// Force it off so a real .env with BOOKING_ENABLED=true can't launch browsers here.
+process.env.BOOKING_ENABLED = "false";
 
 const sent: string[] = [];
 // Stub fetch so telegram.ts "sends" successfully offline, and capture the text.

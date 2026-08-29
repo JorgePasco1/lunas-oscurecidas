@@ -57,9 +57,9 @@ const t1 = chooseTargets(
 expect(t1.get("Jorge")?.hora === "11:00", "skips the 1-cupo slot, takes earliest with >=2");
 expect(t1.get("Amigo")?.hora === "11:00", "both target the same slot");
 
-console.log("\n4) chooseTargets falls back to earliest when none fits all");
+console.log("\n4) chooseTargets books NOBODY when no slot fits all (identical-or-nothing)");
 const t2 = chooseTargets([slot("11/09/2026", "08:00", 1)], two);
-expect(t2.get("Jorge")?.hora === "08:00", "falls back to earliest (they'll compete)");
+expect(t2.size === 0, "no slot has >=2 cupos → empty plan (book none)");
 
 console.log("\n5) fmtBookingResults renders each state");
 const msg = fmtBookingResults([

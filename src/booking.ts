@@ -47,10 +47,10 @@ async function solveCaptcha(
 }
 
 /** Decide which slot each unbooked account should target.
- *  - sameSlot: everyone aims at the earliest slot that fits all of them
- *    (cupos >= n); if none fits, everyone aims at the earliest slot (they
- *    compete; losers retry next cycle).
- *  - otherwise: everyone aims at the earliest slot too (simplest). */
+ *  - sameSlot (identical-or-nothing): everyone aims at the earliest slot that
+ *    fits ALL of them (cupos >= n). If NO slot fits all, return an empty plan —
+ *    we book nobody rather than split people across different slots.
+ *  - otherwise: everyone aims at the earliest slot (they compete). */
 export function chooseTargets(
   slots: SlotInfo[],
   accounts: Account[]
@@ -60,10 +60,10 @@ export function chooseTargets(
   if (sorted.length === 0) return plan;
 
   const n = accounts.length;
-  const fitsAll = config.booking.sameSlot
-    ? sorted.find((s) => s.cupos >= n)
-    : undefined;
-  const shared = fitsAll ?? sorted[0];
+  const shared = config.booking.sameSlot
+    ? sorted.find((s) => s.cupos >= n) // must have room for everyone at once
+    : sorted[0];
+  if (!shared) return plan; // identical-or-nothing: no slot fits all → book none
   for (const a of accounts) plan.set(a.label, shared);
   return plan;
 }
