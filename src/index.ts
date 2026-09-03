@@ -3,6 +3,7 @@ import { assertTelegramConfigured, config } from "./config.js";
 import { ensureDataDir } from "./state.js";
 import { esc, sendTelegram } from "./telegram.js";
 import { pingHealthcheck } from "./health.js";
+import { runWarm } from "./warm.js";
 import { maybeHeartbeat, runCycle } from "./watcher.js";
 
 let running = false;
@@ -31,6 +32,42 @@ async function main(): Promise<void> {
   assertTelegramConfigured();
   await ensureDataDir();
 
+  const bookingMode = !config.booking.enabled
+    ? "solo aviso (sin reservar)"
+    : config.booking.dryRun
+      ? "auto-reserva en SIMULACRO (dry-run)"
+      : "auto-reserva EN VIVO";
+  const who = config.accounts.map((a) => a.label).join(", ");
+
+  // ---- Warm-session mode: one always-on browser per account, fast poll ----
+  if (config.warm.enabled) {
+    console.log(
+      `[index] starting WARM mode — sede="${config.targetSede}" ` +
+        `poll=${config.warm.pollSeconds}s accounts=${config.accounts.length} ` +
+        `headless=${config.headless}`
+    );
+    const prefLine = config.booking.preferFecha
+      ? `\nPrioridad: <b>${esc(config.booking.preferFecha)} ${esc(
+          config.booking.preferHora
+        )}</b>${
+          config.booking.preferUntil
+            ? ` hasta el <b>${esc(config.booking.preferUntil)}</b>, luego el más cercano`
+            : " (estricto)"
+        }`
+      : "";
+    await sendTelegram(
+      `🟢 <b>Watcher iniciado</b> (sesiones tibias)\n` +
+        `Vigilando <b>${esc(config.targetSede)}</b> cada <code>${esc(
+          String(config.warm.pollSeconds)
+        )}s</code> con sesiones ya logueadas.\n` +
+        `Cuentas: <b>${esc(who)}</b>\n` +
+        `Modo: <b>${esc(bookingMode)}</b>${prefLine}`
+    );
+    await runWarm(); // never returns
+    return;
+  }
+
+  // ---- Legacy cron mode ----
   if (!cron.validate(config.schedule.checkCron)) {
     throw new Error(`Invalid CHECK_CRON: ${config.schedule.checkCron}`);
   }
@@ -40,12 +77,6 @@ async function main(): Promise<void> {
       `heartbeat=${config.schedule.heartbeatHours}h headless=${config.headless}`
   );
 
-  const bookingMode = !config.booking.enabled
-    ? "solo aviso (sin reservar)"
-    : config.booking.dryRun
-      ? "auto-reserva en SIMULACRO (dry-run)"
-      : "auto-reserva EN VIVO";
-  const who = config.accounts.map((a) => a.label).join(", ");
   await sendTelegram(
     `🟢 <b>Watcher iniciado</b>\n` +
       `Vigilando <b>${esc(config.targetSede)}</b> cada <code>${esc(

@@ -73,6 +73,25 @@ export const config = {
     sameSlot: bool("BOOK_SAME_SLOT", true),
     // How many account browser sessions to run at once (Pi RAM is limited).
     concurrency: optionalInt("BOOK_CONCURRENCY", 1),
+    // Preferred slot. When PREFER_FECHA is set, the bot books ONLY that date,
+    // choosing PREFER_HORA first and otherwise the earliest other hour that day.
+    // (Used to line the remaining account up with a partner already booked on a
+    // specific date.) Empty = book the earliest available slot, any date.
+    preferFecha: optional("PREFER_FECHA", ""),
+    preferHora: optional("PREFER_HORA", ""),
+    // Deadline for the PREFER_FECHA hold-out, as a Lima date (YYYY-MM-DD). On or
+    // after this date, drop the preference and book the EARLIEST slot on ANY date.
+    // Empty = hold out for PREFER_FECHA indefinitely.
+    preferUntil: optional("PREFER_UNTIL", ""),
+  },
+  warm: {
+    // Keep one browser per account permanently logged in and parked at the
+    // reserva modal, polling fast and booking in-place (~2-3s) instead of
+    // building a cold session (~20s) each time. The big win for fast-vanishing
+    // slots. Costs one always-on Chromium per account.
+    enabled: bool("WARM_SESSIONS", false),
+    // Seconds between availability polls per warm session.
+    pollSeconds: optionalInt("WARM_POLL_SECONDS", 10),
   },
   telegram: {
     // Optional at import so the scraper can run standalone for selector

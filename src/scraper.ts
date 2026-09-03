@@ -23,6 +23,14 @@ function log(...args: unknown[]): void {
   console.log("[scraper]", ...args);
 }
 
+// Warm sessions poll every few seconds; silence the routine per-poll lines
+// ("sede options", "fecha options: (none)") to keep the Pi's journal quiet.
+// Real availability and errors are always logged.
+let verboseScrape = true;
+export function setScrapeVerbose(v: boolean): void {
+  verboseScrape = v;
+}
+
 /** When DUMP_DOM=true, print structural details of a stage we couldn't probe
  *  unauthenticated (table rows, buttons, modal select ids) so a single live
  *  run reveals the exact selectors. No-op in production. */
@@ -133,7 +141,7 @@ async function clickByText(page: Page, name: string | RegExp): Promise<void> {
   await page.getByText(name).first().click({ timeout: STEP_TIMEOUT });
 }
 
-async function login(page: Page, account: Account): Promise<void> {
+export async function login(page: Page, account: Account): Promise<void> {
   log(`navigating to menu (${account.label})`);
   await gotoWithRetry(page, config.site.menuUrl);
 
@@ -164,7 +172,7 @@ async function login(page: Page, account: Account): Promise<void> {
   log("logged in");
 }
 
-async function openExpediente(page: Page, account: Account): Promise<void> {
+export async function openExpediente(page: Page, account: Account): Promise<void> {
   // The "Acciones" eye icon is an <a id="...gvProgramacion_btnAccion_N">. These
   // links exist ONLY on real data rows, so they skip empty sub-tables like
   // "Programación de Expedientes / 0 registros" that break a naive first-row pick.
@@ -192,7 +200,49 @@ async function openExpediente(page: Page, account: Account): Promise<void> {
   log("opened expediente detail");
 }
 
+/** Read a booked ("Programado") Separa-Cita-Peritaje appointment from the detail
+ *  page's Etapas table, if one exists. Returns its fecha/hora, or null if the
+ *  cita step is still Pendiente (not booked). This is the GROUND TRUTH for
+ *  whether an account already has its inspection appointment. */
+export async function readProgrammedCita(
+  page: Page
+): Promise<{ fecha: string; hora: string } | null> {
+  const row = page
+    .locator("tr", { hasText: /Separa Cita Peritaje/i })
+    .first();
+  if (!(await row.count())) return null;
+  const txt = (await row.innerText().catch(() => "")) || "";
+  if (!/Programado/i.test(txt)) return null; // still Pendiente → not booked
+  const m = txt.match(/(\d{2}\/\d{2}\/\d{4})\D{0,10}(\d{2}:\d{2})/);
+  // Programmed even if we can't parse the exact time (be conservative: booked).
+  return { fecha: m?.[1] ?? "?", hora: m?.[2] ?? "?" };
+}
+
+/** Error thrown when the reserve UI is unavailable because the account already
+ *  has a programmed cita (the "Reservar Cita" section is hidden). Not a fault —
+ *  it means this account is DONE. */
+export interface AlreadyBookedError extends Error {
+  alreadyBooked: { fecha: string; hora: string };
+}
+
 async function openModal(page: Page): Promise<Locator> {
+  // Before trying to open the modal: if the reserve section (#MainContent_DivCita)
+  // is hidden, this account has no reserve UI. The usual reason is that it ALREADY
+  // has a programmed cita — in which case the site hides the button. Detect that
+  // explicitly instead of timing out for 20s clicking an invisible button.
+  const divCita = page.locator("#MainContent_DivCita");
+  if ((await divCita.count()) && !(await divCita.isVisible().catch(() => false))) {
+    const cita = await readProgrammedCita(page);
+    if (cita) {
+      const e = new Error(
+        `already has a programmed cita ${cita.fecha} ${cita.hora}`
+      ) as AlreadyBookedError;
+      e.alreadyBooked = cita;
+      throw e;
+    }
+    throw new Error("reserve section (DivCita) is hidden but no programmed cita found");
+  }
+
   await dump("detail page buttons", async () => {
     const btns = await page.getByRole("button").allInnerTexts().catch(() => []);
     console.log("buttons:", JSON.stringify(btns));
@@ -315,7 +365,7 @@ export async function selectSede(
 ): Promise<{ sede: Locator; fecha: Locator; hora: Locator; sedeMatch: string }> {
   const { sede, fecha, hora } = await modalSelects(modal);
   const sedeLabels = await optionLabels(sede);
-  log("sede options:", sedeLabels.join(" | "));
+  if (verboseScrape) log("sede options:", sedeLabels.join(" | "));
   const sedeMatch =
     sedeLabels.find((l) => l.toUpperCase() === config.targetSede.toUpperCase()) ??
     sedeLabels.find((l) =>
@@ -331,7 +381,7 @@ export async function selectSede(
   return { sede, fecha, hora, sedeMatch };
 }
 
-async function readAvailability(
+export async function readAvailability(
   page: Page,
   modal: Locator
 ): Promise<SlotInfo[]> {
@@ -369,7 +419,9 @@ async function readAvailability(
   // Iterate every available fecha and inspect its horas.
   const fechaLabels = await optionLabels(fecha);
   const realFechas = fechaLabels.filter((f) => !NO_SLOT_RE.test(f));
-  log("fecha options:", realFechas.join(" | ") || "(none)");
+  if (verboseScrape || realFechas.length > 0) {
+    log("fecha options:", realFechas.join(" | ") || "(none)");
+  }
 
   const found: SlotInfo[] = [];
   for (const f of realFechas) {
@@ -425,9 +477,16 @@ export interface Session {
   close: () => Promise<void>;
 }
 
-/** Launch a browser, log in as `account`, open its expediente and the Reserva
- *  de Citas modal. Caller MUST call close(). */
-export async function openSession(account: Account): Promise<Session> {
+export interface BrowserHandle {
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+  close: () => Promise<void>;
+}
+
+/** Launch a fresh headless browser + page (no login yet). Reused by cold
+ *  sessions and by warm sessions (which keep the browser and re-auth in place). */
+export async function launchBrowser(): Promise<BrowserHandle> {
   const browser = await chromium.launch({
     headless: config.headless,
     executablePath: config.chromiumPath || undefined,
@@ -445,21 +504,30 @@ export async function openSession(account: Account): Promise<Session> {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
   };
+  return { browser, context, page, close };
+}
+
+/** On an existing page, log in → open expediente → open the Reserva modal.
+ *  Returns the modal Locator. Used both to establish and to RE-establish
+ *  (re-auth) a warm session after a logout, reusing the same browser. Tags any
+ *  error with the stage + a screenshot. */
+export async function establishSession(
+  page: Page,
+  account: Account
+): Promise<Locator> {
   let stage = "login";
   try {
     await login(page, account);
     stage = "open-expediente";
     await openExpediente(page, account);
     stage = "open-modal";
-    const modal = await openModal(page);
-    return { browser, page, modal, close };
+    return await openModal(page);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     let shot: string | undefined;
     if (config.saveScreenshots && !isNetworkError(reason)) {
       shot = await screenshot(page, `fail-${stage}`).catch(() => undefined);
     }
-    await close();
     const e = err instanceof Error ? err : new Error(reason);
     (e as StageError).stage = stage;
     (e as StageError).screenshot = shot;
@@ -467,10 +535,46 @@ export async function openSession(account: Account): Promise<Session> {
   }
 }
 
+/** True if `page` is sitting on the login screen (session expired / logged out):
+ *  the Tipo-Documento select is present and the solicitudes listing is not. */
+export async function isLoggedOut(page: Page): Promise<boolean> {
+  const loginVisible = await page
+    .locator("#DdlDocumento")
+    .isVisible()
+    .catch(() => false);
+  return loginVisible;
+}
+
+/** Launch a browser, log in as `account`, open its expediente and the Reserva
+ *  de Citas modal. Caller MUST call close(). */
+export async function openSession(account: Account): Promise<Session> {
+  const handle = await launchBrowser();
+  const { browser, page, close } = handle;
+  try {
+    const modal = await establishSession(page, account);
+    return { browser, page, modal, close };
+  } catch (err) {
+    await close();
+    throw err;
+  }
+}
+
 /** Error thrown by openSession/booking, tagged with the stage + screenshot. */
 interface StageError extends Error {
   stage?: string;
   screenshot?: string;
+}
+
+/** Ground-truth check after a booking attempt: reload the account's expediente
+ *  detail and read whether a cita is now Programado. Reuses the logged-in page
+ *  (the session cookie is still valid). Returns the booked cita, or null. */
+export async function verifyBooked(
+  page: Page,
+  account: Account
+): Promise<{ fecha: string; hora: string } | null> {
+  await gotoWithRetry(page, config.site.menuUrl);
+  await openExpediente(page, account);
+  return readProgrammedCita(page);
 }
 
 /** Check availability for one account: open a session, read slots, close. */

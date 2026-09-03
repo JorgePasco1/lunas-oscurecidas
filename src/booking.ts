@@ -7,13 +7,20 @@ import {
   selectSlot,
   settleExport as settle,
   sortSlots,
+  verifyBooked,
   type Session,
 } from "./scraper.js";
+import { esc } from "./telegram.js";
 import { limaNow } from "./time.js";
 import type { Account, BookingResult, SlotInfo } from "./types.js";
 
 function log(...a: unknown[]): void {
   console.log("[booking]", ...a);
+}
+
+/** Collapse a multi-line Playwright error into a short single line for alerts. */
+function oneLine(s: string): string {
+  return s.replace(/\s*\n[\s\S]*$/, "").replace(/\s+/g, " ").trim().slice(0, 300);
 }
 
 // Confirmed control ids from the live modal DOM dump. The booking sequence is:
@@ -32,7 +39,7 @@ const CAPTCHA_INPUT = "#MainContent_idUcitas_txtimg";
 
 /** Read the captcha challenge (e.g. "53 + 31 = ?") and compute the answer.
  *  Supports +, -, × just in case, though the field is labelled "suma". */
-async function solveCaptcha(
+export async function solveCaptcha(
   page: Page
 ): Promise<{ challenge: string; answer: number } | null> {
   const raw = (await page.locator(CAPTCHA_LABEL).innerText().catch(() => "")) || "";
@@ -68,6 +75,76 @@ export function chooseTargets(
   return plan;
 }
 
+/**
+ * Commit a booking on an ALREADY-OPEN modal whose fecha+hora are already
+ * selected: solve the captcha → Reservar Cita → Aceptar y confirmar → verify.
+ * Shared by the cold path (bookForAccount) and warm sessions. May throw on hard
+ * timeouts (caller catches); returns a soft failure when it can't verify success.
+ */
+export async function finalizeBooking(
+  page: Page,
+  account: Account,
+  slot: SlotInfo
+): Promise<BookingResult> {
+  const cap = await solveCaptcha(page);
+  if (!cap) {
+    return {
+      account: account.label,
+      ok: false,
+      dryRun: false,
+      slot,
+      reason: "could not read/solve captcha — aborted before booking",
+    };
+  }
+  await page.locator(CAPTCHA_INPUT).fill(String(cap.answer)).catch(() => {});
+  const capNote = `captcha ${cap.challenge.replace(/\s*=.*/, "")} = ${cap.answer}`;
+  log(`LIVE booking ${account.label}: ${slot.fecha} ${slot.hora} (${capNote})`);
+
+  await page.locator(BTN_RESERVAR).click({ timeout: 20_000 });
+  await settle(page, 1200);
+  // Confirm panel (PanelValidar) appears; wait for its accept button.
+  await page.locator(BTN_CONFIRMAR).waitFor({ state: "visible", timeout: 15_000 });
+  await page.locator(BTN_CONFIRMAR).click({ timeout: 20_000 });
+  await settle(page, 1500);
+
+  let shot: string | undefined;
+  if (config.saveScreenshots) {
+    shot = await screenshot(page, `booked-${account.label}`).catch(() => undefined);
+  }
+  // Close the success dialog if present (never fatal).
+  await page.locator(BTN_CERRAR_OK).click({ timeout: 8_000 }).catch(() => {});
+
+  // GROUND TRUTH: reload the expediente and check the cita is now Programado.
+  // The old body-text heuristic gave false NEGATIVES (it missed Amigo's real
+  // 01/10 08:00 booking on 2026-09-03), so we confirm against the trámite itself.
+  const cita = await verifyBooked(page, account).catch(() => null);
+  if (!cita) {
+    return {
+      account: account.label,
+      ok: false,
+      dryRun: false,
+      slot,
+      reason:
+        "clicked confirm but no programmed cita found on re-check — the slot may have been taken; CHECK MANUALLY",
+      screenshot: shot,
+    };
+  }
+  log(`CONFIRMED ${account.label}: cita programada ${cita.fecha} ${cita.hora}`);
+  // Trust the trámite's own recorded date/time over what we selected.
+  const bookedSlot: SlotInfo = {
+    ...slot,
+    fecha: cita.fecha !== "?" ? cita.fecha : slot.fecha,
+    hora: cita.hora !== "?" ? cita.hora : slot.hora,
+  };
+  return {
+    account: account.label,
+    ok: true,
+    dryRun: false,
+    slot: bookedSlot,
+    screenshot: shot,
+  };
+}
+
 /** Book (or dry-run) the given slot for one account. Opens its own session. */
 export async function bookForAccount(
   account: Account,
@@ -96,20 +173,18 @@ export async function bookForAccount(
       cupos: target.cupos,
     };
 
-    // Solve the arithmetic captcha and fill the Resultado field (required before
-    // Reservar Cita). Harmless in dry-run (nothing is submitted).
-    const cap = await solveCaptcha(page);
-    if (cap) {
-      await page.locator(CAPTCHA_INPUT).fill(String(cap.answer)).catch(() => {});
-      log(`captcha "${cap.challenge}" -> ${cap.answer}`);
-    } else {
-      log("captcha not found/parsed");
-    }
-    const capNote = cap
-      ? `captcha ${cap.challenge.replace(/\s*=.*/, "")} = ${cap.answer}`
-      : "captcha NOT parsed";
-
     if (dryRun) {
+      // Solve the captcha for the log/probe (harmless — nothing is submitted).
+      const cap = await solveCaptcha(page);
+      if (cap) {
+        await page.locator(CAPTCHA_INPUT).fill(String(cap.answer)).catch(() => {});
+        log(`captcha "${cap.challenge}" -> ${cap.answer}`);
+      } else {
+        log("captcha not found/parsed");
+      }
+      const capNote = cap
+        ? `captcha ${cap.challenge.replace(/\s*=.*/, "")} = ${cap.answer}`
+        : "captcha NOT parsed";
       const shot = config.saveScreenshots
         ? await screenshot(page, `dryrun-${account.label}`).catch(() => undefined)
         : undefined;
@@ -128,48 +203,8 @@ export async function bookForAccount(
       };
     }
 
-    // ---- LIVE booking (only when DRY_RUN_BOOKING=false) ----
-    if (!cap) {
-      return {
-        account: account.label,
-        ok: false,
-        dryRun: false,
-        slot,
-        reason: "could not read/solve captcha — aborted before booking",
-      };
-    }
-    log(`LIVE booking ${account.label}: ${target.fecha} ${target.hora} (${capNote})`);
-    await page.locator(BTN_RESERVAR).click({ timeout: 20_000 });
-    await settle(page, 1200);
-    // Confirm panel (PanelValidar) appears; wait for its accept button.
-    await page.locator(BTN_CONFIRMAR).waitFor({ state: "visible", timeout: 15_000 });
-    await page.locator(BTN_CONFIRMAR).click({ timeout: 20_000 });
-    await settle(page, 1500);
-
-    const bodyText = (await page.locator("body").innerText().catch(() => "")) || "";
-    const confirmed = /reserv|cita.*(program|confirm|registr)|éxito|exito/i.test(
-      bodyText
-    );
-    let shot: string | undefined;
-    if (config.saveScreenshots) {
-      shot = await screenshot(page, `booked-${account.label}`).catch(
-        () => undefined
-      );
-    }
-    // Close the success dialog if present (never fatal).
-    await page.locator(BTN_CERRAR_OK).click({ timeout: 8_000 }).catch(() => {});
-
-    if (!confirmed) {
-      return {
-        account: account.label,
-        ok: false,
-        dryRun: false,
-        slot,
-        reason: "clicked confirm but couldn't verify success text — CHECK MANUALLY",
-        screenshot: shot,
-      };
-    }
-    return { account: account.label, ok: true, dryRun: false, slot, screenshot: shot };
+    // ---- LIVE booking (fecha+hora already selected) ----
+    return await finalizeBooking(page, account, slot);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const shot = (err as { screenshot?: string }).screenshot;
@@ -248,13 +283,18 @@ export async function attemptBookings(
 export function fmtBookingResults(results: BookingResult[]): string {
   const at = limaNow();
   const lines = results.map((r) => {
-    const who = `<b>${r.account}</b>`;
+    const who = `<b>${esc(r.account)}</b>`;
     if (r.ok && r.dryRun)
-      return `🧪 ${who}: SIMULACRO — reservaría ${r.slot?.fecha} ${r.slot?.hora}${
-        r.note ? ` · ${r.note}` : ""
-      }`;
-    if (r.ok) return `✅ ${who}: RESERVADO ${r.slot?.fecha} ${r.slot?.hora}`;
-    return `⚠️ ${who}: no reservado — ${r.reason}`;
+      return `🧪 ${who}: SIMULACRO — reservaría ${esc(r.slot?.fecha ?? "")} ${esc(
+        r.slot?.hora ?? ""
+      )}${r.note ? ` · ${esc(r.note)}` : ""}`;
+    if (r.ok)
+      return `✅ ${who}: RESERVADO ${esc(r.slot?.fecha ?? "")} ${esc(
+        r.slot?.hora ?? ""
+      )}`;
+    // r.reason is a raw Playwright error that can contain literal <input.../>
+    // HTML — MUST be escaped or Telegram rejects the whole message (400).
+    return `⚠️ ${who}: no reservado — ${esc(oneLine(r.reason ?? "sin detalle"))}`;
   });
   return `${lines.join("\n")}\n<i>${at}</i>`;
 }

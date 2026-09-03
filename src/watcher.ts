@@ -24,7 +24,7 @@ async function getMem(): Promise<WatcherState> {
 }
 
 /** Signature of the fields whose change justifies a disk write. */
-function materialSig(s: WatcherState): string {
+export function materialSig(s: WatcherState): string {
   return JSON.stringify({
     a: [...s.alertedKeys].sort(),
     f: s.failureStreak,
@@ -35,14 +35,14 @@ function materialSig(s: WatcherState): string {
   });
 }
 
-async function persistIfMaterial(
+export async function persistIfMaterial(
   state: WatcherState,
   sigBefore: string
 ): Promise<void> {
   if (materialSig(state) !== sigBefore) await saveState(state);
 }
 
-function fmtSlots(slots: SlotInfo[]): string {
+export function fmtSlots(slots: SlotInfo[]): string {
   // Group horas by fecha for a compact message.
   const byFecha = new Map<string, SlotInfo[]>();
   for (const s of slots) {
